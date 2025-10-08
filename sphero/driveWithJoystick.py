@@ -52,6 +52,7 @@ class SpheroController:
         self.boosterCounter = 0
         self.calibrated = False
         self.deadzone = 0.2
+        self.hillCounter = 0
 
         
 
@@ -183,12 +184,12 @@ class SpheroController:
                             angle = math.degrees(math.atan2(x_acc, z_acc))
 
                             if abs(angle) >= 30:
-                                hillCounter += 1
-                                if hillCounter > 10:
+                                self.hillCounter += 1
+                                if self.hillCounter > 10:
                                     seconds = (current_time2 - self.gameStartTime)
                                     print(f"Player {self.number} going wild")
                             else:
-                                hillCounter = 0
+                                self.hillCounter = 0
                         else:
                             print("Acceleration data is not available.")
                     
