@@ -53,6 +53,14 @@ class SpheroController:
         self.calibrated = False
         self.deadzone = 0.2
         self.hillCounter = 0
+        self.prev_btn_L1 = 0
+        self.prev_btn_R1 = 0
+        try:
+            self.has_hat = self.joystick.get_numhats() > 0
+        except Exception:
+            self.has_hat = False
+        self.hat_prev = (0, 0)
+        self.snap_turn_degrees = 90
 
         
 
@@ -234,6 +242,28 @@ class SpheroController:
                         self.move(api, heading, speed_cmd)
                     else:
                         api.set_speed(0)
+
+                    # Snap-turns: 1x 90° bij druk op R1/L1 of D-pad rechts/links
+                    btn_L1 = self.joystick.get_button(buttons['L1'])
+                    btn_R1 = self.joystick.get_button(buttons['R1'])
+                    if btn_R1 == 1 and self.prev_btn_R1 == 0:
+                        self.move(api, (self.base_heading + self.snap_turn_degrees) % 360, self.speed)
+                    if btn_L1 == 1 and self.prev_btn_L1 == 0:
+                        self.move(api, (self.base_heading - self.snap_turn_degrees) % 360, self.speed)
+                    self.prev_btn_R1 = btn_R1
+                    self.prev_btn_L1 = btn_L1
+
+                    if self.has_hat:
+                        try:
+                            hat = self.joystick.get_hat(0)
+                        except Exception:
+                            hat = (0, 0)
+                        if hat != self.hat_prev:
+                            if hat == (1, 0):
+                                self.move(api, (self.base_heading + self.snap_turn_degrees) % 360, self.speed)
+                            elif hat == (-1, 0):
+                                self.move(api, (self.base_heading - self.snap_turn_degrees) % 360, self.speed)
+                        self.hat_prev = hat
 
         finally:
             pygame.quit()
