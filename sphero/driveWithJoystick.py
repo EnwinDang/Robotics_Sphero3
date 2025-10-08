@@ -86,8 +86,10 @@ class SpheroController:
             return None
 
     def move(self, api, heading, speed):
-        api.set_heading(heading)
-        api.set_speed(speed)
+        safe_heading = int(heading) % 360
+        safe_speed = max(0, min(255, int(speed)))
+        api.set_heading(safe_heading)
+        api.set_speed(safe_speed)
 
     def toggle_calibration_mode(self, api, Y):
         if not self.calibration_mode:
