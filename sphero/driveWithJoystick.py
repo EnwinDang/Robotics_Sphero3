@@ -52,6 +52,17 @@ class SpheroController:
         self.boosterCounter = 0
         self.calibrated = False
 
+        # Analog vector control parameters
+        self.deadzone = 0.15
+        self.expo = 0.35  # 0=linear, higher makes center less sensitive
+        self.max_speed = 255  # device max; presets scale within this
+        self._last_sent_heading = None
+        self._last_sent_speed = 0
+        self._min_command_interval = 0.03  # ~33 Hz cap
+        self._last_send = 0.0
+        self._smooth_speed = 0.0
+        self._smooth_alpha = 0.45  # smoothing factor
+
         
 
     def discover_nearest_toy(self):
@@ -88,6 +99,56 @@ class SpheroController:
         api.set_heading(heading)
         api.set_speed(speed)
 
+    def _apply_deadzone_expo(self, value):
+        # Apply circular deadzone/expo for joystick magnitude component [0..1]
+        if value <= self.deadzone:
+            return 0.0
+        # Normalize to 0..1 after deadzone
+        norm = (value - self.deadzone) / (1.0 - self.deadzone)
+        if self.expo <= 0.0:
+            return max(0.0, min(1.0, norm))
+        # Exponential response curve
+        curved = pow(norm, 1.0 + self.expo)
+        return max(0.0, min(1.0, curved))
+
+    def _compute_vector_command(self, X, Y, preset_speed):
+        # Map joystick (X right+, Y down+) to heading and speed
+        # We want forward (Y < 0) to be base_heading, right to be +90
+        magnitude = math.sqrt(X * X + Y * Y)
+        magnitude = min(1.0, magnitude)
+        adj = self._apply_deadzone_expo(magnitude)
+        if adj == 0.0:
+            return None, 0
+
+        angle_deg = math.degrees(math.atan2(X, -Y))  # 0 forward, +90 right
+        heading = (self.base_heading + angle_deg) % 360
+
+        # Scale speed by preset (0..max_speed)
+        speed = int(max(0, min(self.max_speed, (preset_speed / self.max_speed) * self.max_speed * adj)))
+        return heading, speed
+
+    def _should_send(self, heading, speed):
+        now = time.time()
+        if now - self._last_send < self._min_command_interval:
+            return False
+        if self._last_sent_heading is None:
+            return True
+        dh = abs((heading - self._last_sent_heading + 180) % 360 - 180)
+        ds = abs(speed - self._last_sent_speed)
+        return dh >= 3 or ds >= 5
+
+    def _send_command(self, api, heading, speed):
+        if not self._should_send(heading, speed):
+            return
+        # Smooth speed to reduce wheel slip and packet bursts
+        self._smooth_speed = (
+            self._smooth_alpha * speed + (1.0 - self._smooth_alpha) * self._smooth_speed
+        )
+        self.move(api, heading, int(self._smooth_speed))
+        self._last_sent_heading = heading
+        self._last_sent_speed = int(self._smooth_speed)
+        self._last_send = time.time()
+
     def toggle_calibration_mode(self, api, Y):
         if not self.calibration_mode:
             self.enter_calibration_mode(api, Y)
@@ -119,6 +180,15 @@ class SpheroController:
         self.boosterCounter = 0
         self.gameStartTime = time.time()
         api.set_front_led(Color(0, 255, 0))
+        # brief blink to signal calibrated
+        try:
+            api.set_main_led(Color(0, 60, 0))
+            time.sleep(0.1)
+            api.set_main_led(Color(0, 0, 0))
+            time.sleep(0.05)
+            api.set_main_led(self.color)
+        except Exception:
+            pass
 
     LED_PATTERNS = {
         1: '1',
@@ -197,39 +267,45 @@ class SpheroController:
 
 
                     if (self.joystick.get_button(buttons['1']) == 1):
-                        self.speed = 50
+                        self.speed = 120
                         self.color=Color(r=255, g=200, b=0)
                         self.display_number(api)
                     if (self.joystick.get_button(buttons['2']) == 1):
-                        self.speed =70
+                        self.speed =170
                         self.color = Color(r=255, g=100, b=0)
                         self.display_number(api)
 
                     if (self.joystick.get_button(buttons['3']) == 1):
-                        self.speed = 100
+                        self.speed = 210
                         self.color = Color(r=255, g=50, b=0)
                         self.display_number(api)
 
                     if (self.joystick.get_button(buttons['4']) == 1):
-                        self.speed = 200
+                        self.speed = 240
                         self.color = Color(r=255, g=0, b=0)
                         self.display_number(api)
 
+                    # Boost (R2) to full speed when held
+                    boost = 1 if self.joystick.get_button(buttons['R2']) == 1 else 0
 
-
-
-                    if Y < -0.7:
-                        self.move(api, self.base_heading, self.speed)
-                    elif Y > 0.7:
-                            self.move(api, self.base_heading + 180, self.speed)
-                    elif X > 0.7:
-                            self.move(api, self.base_heading + 22, 0)
-                    elif X < -0.7:
-                            self.move(api, self.base_heading - 22, 0)
+                    heading, speed = self._compute_vector_command(X, Y, self.max_speed if boost else self.speed)
+                    if speed == 0:
+                        # Stop only if we were moving to avoid flooding
+                        if self._last_sent_speed != 0:
+                            api.set_speed(0)
+                            self._last_sent_speed = 0
+                            self._last_sent_heading = heading if heading is not None else self._last_sent_heading
+                            self._last_send = time.time()
                     else:
-                        api.set_speed(0)
+                        self._send_command(api, heading, speed)
    
-                    self.base_heading = api.get_heading()
+                    # Only sample heading occasionally; avoid high-rate queries
+                    if time.time() - self.last_heading_reset_time >= self.heading_reset_interval:
+                        try:
+                            self.base_heading = api.get_heading()
+                        except Exception:
+                            pass
+                        self.last_heading_reset_time = time.time()
 
         finally:
             pygame.quit()
