@@ -30,17 +30,6 @@ class SpheroController:
         self.gameOn=False; self.hillCounter=0
         self._stop_evt=threading.Event(); self._thread=None; self._api_ctx=None
 
-        # Vector control config
-        self.deadzone=0.15
-        self.expo=0.35
-        self.max_speed=255
-        self._last_sent_heading=None
-        self._last_sent_speed=0
-        self._min_command_interval=0.03
-        self._last_send=0.0
-        self._smooth_speed=0.0
-        self._smooth_alpha=0.45
-
         # --- Battery state ---
         self._last_batt_check = 0.0
         self.battery_voltage: Optional[float] = None
@@ -61,39 +50,6 @@ class SpheroController:
 
     def move(self,api,heading,speed):
         api.set_heading(heading%360); api.set_speed(speed)
-
-    def _apply_deadzone_expo(self, value: float) -> float:
-        if value <= self.deadzone: return 0.0
-        norm=(value-self.deadzone)/(1.0-self.deadzone)
-        if self.expo <= 0.0: return max(0.0,min(1.0,norm))
-        curved=pow(norm,1.0+self.expo)
-        return max(0.0,min(1.0,curved))
-
-    def _compute_vector_command(self, X: float, Y: float, preset_speed: int):
-        mag=min(1.0,math.sqrt(X*X+Y*Y))
-        adj=self._apply_deadzone_expo(mag)
-        if adj==0.0: return (None,0)
-        angle_deg=math.degrees(math.atan2(X,-Y))
-        heading=(self.base_heading+angle_deg)%360
-        speed=int(max(0,min(self.max_speed,(preset_speed/self.max_speed)*self.max_speed*adj)))
-        return (heading,speed)
-
-    def _should_send(self, heading: float, speed: int) -> bool:
-        now=time.time()
-        if now-self._last_send < self._min_command_interval: return False
-        if self._last_sent_heading is None: return True
-        dh=abs((heading-self._last_sent_heading+180)%360-180)
-        ds=abs(speed-self._last_sent_speed)
-        return dh>=3 or ds>=5
-
-    def _send_command(self, api, heading: float, speed: int):
-        if not self._should_send(heading,speed): return
-        self._smooth_speed=self._smooth_alpha*speed+(1.0-self._smooth_alpha)*self._smooth_speed
-        api.set_heading(heading%360)
-        api.set_speed(int(self._smooth_speed))
-        self._last_sent_heading=heading
-        self._last_sent_speed=int(self._smooth_speed)
-        self._last_send=time.time()
 
     def display_number(self,api):
         try: api.set_matrix_character(str(self.number),self.color)
@@ -166,22 +122,15 @@ class SpheroController:
                     if self.joystick.get_button(buttons['4']):
                         self.speed, self.color=(200,Color(255,0,0)); self.display_number(api)
 
-                    # Boost (R2) to full speed
-                    boost = 1 if self.joystick.get_button(buttons['R2']) else 0
-                    heading, spd = self._compute_vector_command(X,Y,self.max_speed if boost else self.speed)
-                    if spd==0:
-                        if self._last_sent_speed!=0:
-                            api.set_speed(0)
-                            self._last_sent_speed=0
-                            self._last_send=time.time()
-                    else:
-                        self._send_command(api,heading,spd)
+                    # Besturing
+                    if Y<-0.7: self.move(api,self.base_heading,self.speed)
+                    elif Y>0.7: self.move(api,self.base_heading+180,self.speed)
+                    elif X>0.7: self.move(api,self.base_heading+22,0)
+                    elif X<-0.7: self.move(api,self.base_heading-22,0)
+                    else: api.set_speed(0)
 
                     # Heading bijhouden
-                    try:
-                        # sample heading infrequent to reduce BLE traffic
-                        if time.time()-self._last_batt_check >= 1.0:
-                            self.base_heading=api.get_heading()
+                    try: self.base_heading=api.get_heading()
                     except Exception: pass
 
                     # Elke 30s batterij-status updaten
