@@ -51,6 +51,7 @@ class SpheroController:
         self.gameOn = False
         self.boosterCounter = 0
         self.calibrated = False
+        self.deadzone = 0.2
 
         
 
@@ -211,25 +212,25 @@ class SpheroController:
                         self.display_number(api)
 
                     if (self.joystick.get_button(buttons['4']) == 1):
-                        self.speed = 200
+                        self.speed = 255
                         self.color = Color(r=255, g=0, b=0)
                         self.display_number(api)
+                    # Analoge besturing: richting = hoek van joystick tov vooruit; snelheid schaalt met magnitude
+                    dx = X
+                    dy = -Y  # naar voren is negatieve Y in pygame
+                    mag = math.hypot(dx, dy)
 
-
-
-
-                    if Y < -0.7:
-                        self.move(api, self.base_heading, self.speed)
-                    elif Y > 0.7:
-                            self.move(api, self.base_heading + 180, self.speed)
-                    elif X > 0.7:
-                            self.move(api, self.base_heading + 22, 0)
-                    elif X < -0.7:
-                            self.move(api, self.base_heading - 22, 0)
+                    if mag > self.deadzone:
+                        heading_offset = math.degrees(math.atan2(dx, dy))
+                        heading = (self.base_heading + heading_offset) % 360
+                        base_speed = self.speed
+                        # Turbo bij ingedrukte R2
+                        if self.joystick.get_button(buttons['R2']) == 1:
+                            base_speed = 255
+                        speed_cmd = int(base_speed * min(1.0, mag))
+                        self.move(api, heading, speed_cmd)
                     else:
                         api.set_speed(0)
-   
-                    self.base_heading = api.get_heading()
 
         finally:
             pygame.quit()
