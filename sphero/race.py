@@ -1,117 +1,70 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import sys, time, math, argparse
+import sys, time, argparse
 from spherov2 import scanner
 from spherov2.sphero_edu import SpheroEduAPI
-from spherov2.types import Color
-from spherov2.commands.power import Power
+from spherov2.commands import sensor as SensorCmd  # pour désactiver les collisions
 
-SEGMENTS_CM = [200, 200, 100, 100, 150, 100, 100, 200, 250]     # top →, right ↓, bottom ←, left ↑, finish →
-HEADINGS    = [  0,  90, 180, 270, 180,  90, 180, 270,   0]     # 0°=vers la droite
+# === Trajet (tes valeurs) ===
+SEGMENTS_CM = [200, 200, 100, 100, 150, 100, 100, 200, 250]
+HEADINGS    = [  0,  90, 180, 270, 180,  90, 180, 270,   0]
 
-# Vitesse et modèle distance→temps
-SPEED_PCT_DEFAULT = 70                      # 0–100 (l’API mappe vers 0–255)
-CM_PER_SEC_DEFAULT = 41.7                   # à mesurer 1x sur ton sol à ta vitesse
-
-# Douceur d’accélération/freinage (limite le patinage)
-RAMP = 0.35
-BRAKE = 0.20
-
-# LEDs
-LED_READY = Color(0, 0, 255)
-LED_RUN   = Color(255, 120, 0)
-LED_OK    = Color(0, 255, 0)
-LED_ERR   = Color(255, 0, 0)
-
-# ===================== FONCTIONS =====================
+# === Vitesse ===
+SPEED_PCT_DEFAULT = 70
+CM_PER_SEC_DEFAULT = 41.7  # mesuré: 5 m en 12 s
 
 def find_toy(name_or_mac: str):
-    toys = scanner.find_toys()
-    for t in toys:
+    for t in scanner.find_toys():
         if t.name == name_or_mac or getattr(t, "address", "") == name_or_mac:
             return t
     return None
 
 def seconds_for_distance(dist_cm: float, cmps: float) -> float:
-    return max(0.0, dist_cm / max(cmps, 1.0))
-
-def print_battery(api, toy_name: str):
-    try:
-        v = Power.get_battery_voltage(api.toy)
-        print(f"[{toy_name}] Battery: {v:.2f} V")
-        if v <= 3.5:
-            print("⚠️  Batterie faible — charge avant les essais.")
-    except Exception:
-        pass
-
-def gentle_roll(api: SpheroEduAPI, heading: int, speed_pct: int, seconds: float):
-    """Petite rampe d’accélération puis freinage actif pour réduire le dérapage."""
-    if seconds <= 0:
-        return
-    # ramp-up
-    api.roll(heading, speed_pct, RAMP)
-    # cruise
-    cruise = max(0.0, seconds - 2*RAMP)
-    if cruise > 0:
-        api.roll(heading, speed_pct, cruise)
-    # ramp-down + petit frein
-    api.roll(heading, max(10, int(0.4 * speed_pct)), RAMP)
-    api.roll(heading, 0, BRAKE)
+    return dist_cm / cmps if cmps > 0 else 0.0
 
 def calibrate_zero(api: SpheroEduAPI):
-    print("🔧 Calibration: vise 0° dans la direction du PREMIER segment, puis ENTER …")
-    try:
-        api.start_calibration()
-    except Exception:
-        pass
+    print("Calibration: oriente 0° vers le 1er segment, puis ENTER …")
+    try: api.start_calibration()
+    except: pass
     input()
-    try:
-        api.finish_calibration()
-    except Exception:
-        api.set_heading(0)
-    print("✅ 0° fixé.\n")
+    try: api.finish_calibration()
+    except: api.set_heading(0)
 
 def run_lap(api: SpheroEduAPI, segments_cm, headings, cmps: float, speed_pct: int):
-    api.set_stabilization(True)
-    api.set_back_led(255)
-    api.set_main_led(LED_RUN)
-
-    # départ
+    # départ visuel simple
     for k in (3,2,1):
-        print(f"… {k}")
-        api.set_main_led(Color(255,255,0)); time.sleep(0.3)
-        api.set_main_led(Color(0,0,0));     time.sleep(0.4)
-    print("🏁 GO!")
-    api.set_main_led(LED_RUN)
+        print(f"... {k}")
+        time.sleep(0.5)
+    print("GO")
 
     t0 = time.perf_counter()
-
     for hdg, dist in zip(headings, segments_cm):
-        api.set_heading(hdg)   # virage instantané pour rester serré
-        secs = seconds_for_distance(dist, cmps)
-        print(f"→ {dist:.0f} cm @ {hdg:3d}°  (~{secs:.2f}s)")
-        gentle_roll(api, hdg, speed_pct, secs)
-
-    api.roll(0,0,0.1)
+        api.set_heading(int(hdg) % 360)
+        dur = seconds_for_distance(dist, cmps)
+        api.roll(int(hdg) % 360, max(10, min(100, speed_pct)), dur)
+        # petit arrêt entre segments pour marquer la rotation
+        api.roll(int(hdg) % 360, 0, 0.05)
     t1 = time.perf_counter()
-    lap = t1 - t0
-    api.set_back_led(0)
-    api.set_main_led(LED_OK)
-    print(f"\n⏱️  Lap time: {lap:.3f} s")
-    return lap
-
+    print(f"Lap time: {t1 - t0:.3f} s")
 
 def main():
-    p = argparse.ArgumentParser(description="Sphero BOLT — Autonome ronde (horaire)")
-    p.add_argument("--name", required=True, help="Nom ou MAC du BOLT (ex: SB-9DD8)")
+    p = argparse.ArgumentParser(description="Sphero BOLT — autonome minimal")
+    p.add_argument("--name", required=True, help="Nom/MAC de la BOLT (ex: SB-9DD8)")
     p.add_argument("--speed", type=int, default=SPEED_PCT_DEFAULT, help="Vitesse % (0–100)")
-    p.add_argument("--cmps", type=float, default=CM_PER_SEC_DEFAULT, help="cm/s mesuré à cette vitesse")
+    p.add_argument("--cmps", type=float, default=CM_PER_SEC_DEFAULT, help="Vitesse en cm/s")
     p.add_argument("--segments", type=str, default=",".join(str(x) for x in SEGMENTS_CM),
-                   help="Segments en cm séparés par des virgules")
+                   help="Segments en cm (séparés par des virgules)")
+    p.add_argument("--headings", type=str, default=",".join(str(x) for x in HEADINGS),
+                   help="Headings en degrés (séparés par des virgules)")
     args = p.parse_args()
 
     segments = [float(x) for x in args.segments.split(",") if x.strip()]
+    headings = [int(x) for x in args.headings.split(",") if x.strip()]
+    if len(segments) != len(headings):
+        print("Segments et headings doivent avoir la même longueur.")
+        sys.exit(2)
+
     toy = find_toy(args.name)
     if toy is None:
         print(f"NO BOLT '{args.name}'")
@@ -120,24 +73,27 @@ def main():
     print(f"Connected {toy.name}")
     try:
         with SpheroEduAPI(toy) as api:
-            api.set_main_led(LED_READY)
-            print_battery(api, toy.name)
+            # important pour éviter le crash de thread collision rencontré plus tôt
+            try: SensorCmd.disable_collision_detected_notify(api.toy)
+            except: pass
+            try: SensorCmd.configure_collision_detection(api.toy, enabled=False)
+            except: pass
+
             calibrate_zero(api)
-            _ = run_lap(api, segments, HEADINGS, args.cmps, max(10, min(100, args.speed)))
-            api.set_main_led(LED_OK)
+            run_lap(api, segments, headings, args.cmps, max(10, min(100, args.speed)))
     except KeyboardInterrupt:
         try:
             with SpheroEduAPI(toy) as api:
-                api.roll(0,0,0.2); api.set_main_led(LED_ERR)
-        except Exception:
+                api.roll(0, 0, 0.2)
+        except:
             pass
-        print("\n STOPED")
+        print("\nSTOPPED")
     except Exception as e:
-        print(f" Error {e}")
+        print(f"Error: {e}")
         try:
             with SpheroEduAPI(toy) as api:
-                api.roll(0,0,0.2); api.set_main_led(LED_ERR)
-        except Exception:
+                api.roll(0, 0, 0.2)
+        except:
             pass
         sys.exit(2)
 
