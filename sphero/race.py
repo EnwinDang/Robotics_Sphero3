@@ -7,12 +7,12 @@ from spherov2.sphero_edu import SpheroEduAPI
 from spherov2.types import Color
 from spherov2.commands.power import Power
 
-SEGMENTS_CM = [400, 200, 440, 200, 60]     # top →, right ↓, bottom ←, left ↑, finish →
-HEADINGS    = [  0,  90, 180, 270,   0]     # 0°=vers la droite
+SEGMENTS_CM = [200, 200, 100, 100, 200, 100, 100, 200, 200]     # top →, right ↓, bottom ←, left ↑, finish →
+HEADINGS    = [  0,  90, 180, 270, 180,  90, 180, 270,   0]     # 0°=vers la droite
 
 # Vitesse et modèle distance→temps
 SPEED_PCT_DEFAULT = 70                      # 0–100 (l’API mappe vers 0–255)
-CM_PER_SEC_DEFAULT = 45.0                   # à mesurer 1x sur ton sol à ta vitesse
+CM_PER_SEC_DEFAULT = 41.7                   # à mesurer 1x sur ton sol à ta vitesse
 
 # Douceur d’accélération/freinage (limite le patinage)
 RAMP = 0.35
